@@ -1,6 +1,19 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Stage, Layer, Image as KonvaImage, Line, Circle } from "react-konva";
 
+const UNIT_CONVERSIONS = {
+  km: { label: "Kilometers (km)", mult: 1, suffix: "km", areaSuffix: "km²" },
+  mi: { label: "Miles (mi)", mult: 0.621371, suffix: "mi", areaSuffix: "mi²" },
+  yd: { label: "Yards (yd)", mult: 1093.61, suffix: "yd", areaSuffix: "yd²" },
+  ft: { label: "Feet (ft)", mult: 3280.84, suffix: "ft", areaSuffix: "ft²" },
+};
+
+const TRAVEL_MODES = {
+  foot: { label: "By foot", speedKmPerDay: 30 },
+  horse: { label: "By horse", speedKmPerDay: 50 },
+  ship: { label: "By ship", speedKmPerDay: 100 },
+};
+
 function computePolylineLengthKm(ptsKm) {
   if (ptsKm.length < 2) return 0;
   let total = 0;
@@ -59,6 +72,8 @@ function App() {
   const [isDragOverWorkspace, setIsDragOverWorkspace] = useState(false);
   const [viewScale, setViewScale] = useState(1);
   const [viewPosition, setViewPosition] = useState({ x: 0, y: 0 });
+  const [displayUnit, setDisplayUnit] = useState("km");
+  const [outputMode, setOutputMode] = useState("distance"); // "distance" | "travel"
 
   const [realWidthInput, setRealWidthInput] = useState("1000"); // km
   const [realHeightInput, setRealHeightInput] = useState("1000"); // km
@@ -149,7 +164,7 @@ function App() {
     return { lengthKm: null, areaKm2: null, perimeterKm: null };
   }, [isPolygonClosed, mode, pointsKm, scale]);
 
-  const handleClick = (e) => {
+  const handleClick = (e) => {  
     if (!imgObj) return;
     if (isDraggingNode) return;
     if (isPanningWorkspace) return;
@@ -190,14 +205,21 @@ function App() {
       return;
     }
 
-    const target = Number(calibrationInput);
-    if (Number.isNaN(target) || target <= 0) {
+    const targetInput = Number(calibrationInput);
+    if (Number.isNaN(targetInput) || targetInput <= 0) {
       setCalibrationError(
         mode === "distance"
-          ? "Enter a valid known distance value in km."
-          : "Enter a valid known area value in km²."
+          ? "Enter a valid known distance value."
+          : "Enter a valid known area value."
       );
       return;
+    }
+
+    let targetKm = targetInput;
+    if (mode === "distance") {
+      targetKm = targetInput / UNIT_CONVERSIONS[displayUnit].mult;
+    } else {
+      targetKm = targetInput / Math.pow(UNIT_CONVERSIONS[displayUnit].mult, 2);
     }
 
     const currentValue = mode === "distance" ? metrics.lengthKm : metrics.areaKm2;
@@ -210,7 +232,7 @@ function App() {
       return;
     }
 
-    const factor = mode === "distance" ? target / currentValue : Math.sqrt(target / currentValue);
+    const factor = mode === "distance" ? targetKm / currentValue : Math.sqrt(targetKm / currentValue);
     if (!Number.isFinite(factor) || factor <= 0) {
       setCalibrationError("Could not compute a valid scale factor.");
       return;
@@ -264,6 +286,10 @@ function App() {
 
   const handleWheelZoom = (e) => {
     e.evt.preventDefault();
+    
+    // Ignore standard scroll wheel events. Trackpad pinch-to-zoom sets ctrlKey=true.
+    if (!e.evt.ctrlKey) return;
+
     const stage = e.target.getStage();
     const oldScale = stage.scaleX();
     const zoomFactor = 1.08;
@@ -338,7 +364,7 @@ function App() {
 
       <input type="file" accept="image/*" onChange={handleUpload} />
 
-      <div style={{ display: "inline-flex", gap: 16, alignItems: "center" }}>
+      <div style={{ display: "inline-flex", gap: 16, alignItems: "center", marginTop: 10 }}>
         <label>
           <input
             type="radio"
@@ -365,11 +391,30 @@ function App() {
           />
           Area
         </label>
+
+        <div style={{ width: 1, height: 24, background: "#d0d7de", margin: "0 8px" }} />
+
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          Display Unit:
+          <select value={displayUnit} onChange={(e) => setDisplayUnit(e.target.value)}>
+            {Object.entries(UNIT_CONVERSIONS).map(([key, data]) => (
+              <option key={key} value={key}>{data.label}</option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ marginLeft: 12 }}>
+          View:
+          <select value={outputMode} onChange={(e) => setOutputMode(e.target.value)}>
+            <option value="distance">Distance</option>
+            <option value="travel">Travel time</option>
+          </select>
+        </label>
       </div>
 
       <div style={{ marginTop: 10, display: "flex", justifyContent: "center", gap: 10 }}>
         <span>
-          Width (km):{" "}
+          Width (base km):{" "}
           <input
             type="number"
             min="0.000001"
@@ -382,7 +427,7 @@ function App() {
           />
         </span>
         <span>
-          Height (km):{" "}
+          Height (base km):{" "}
           <input
             type="number"
             min="0.000001"
@@ -432,8 +477,8 @@ function App() {
           min="0"
           value={calibrationInput}
           onChange={(e) => setCalibrationInput(e.target.value)}
-          placeholder={mode === "distance" ? "Known distance (km)" : "Known area (km²)"}
-          style={{ width: 170 }}
+          placeholder={mode === "distance" ? `Known distance (${UNIT_CONVERSIONS[displayUnit].suffix})` : `Known area (${UNIT_CONVERSIONS[displayUnit].areaSuffix})`}
+          style={{ width: 220 }}
         />
         <button type="button" onClick={applyCalibration} style={{ marginLeft: 8 }}>
           Apply calibration
@@ -449,18 +494,44 @@ function App() {
       </div>
 
       {mode === "distance" && metrics.lengthKm != null && (
-        <h3>Total distance: {metrics.lengthKm.toFixed(2)} km</h3>
+        <div style={{ margin: "20px 0" }}>
+          
+          {outputMode === "distance" && (
+            <h3>
+              Total distance: {(metrics.lengthKm * UNIT_CONVERSIONS[displayUnit].mult).toFixed(2)}{" "}
+              {UNIT_CONVERSIONS[displayUnit].suffix}
+            </h3>
+          )}
+
+          {outputMode === "travel" && (
+            <div>
+              <h3>Travel time estimation</h3>
+
+              {Object.entries(TRAVEL_MODES).map(([key, m]) => (
+                <div key={key}>
+                  <strong>{m.label}:</strong>{" "}
+                  {(metrics.lengthKm / m.speedKmPerDay).toFixed(1)} days
+                </div>
+              ))}
+            </div>
+          )}
+
+        </div>
       )}
       {mode === "area" && (
-        <>
+        <div style={{ margin: "20px 0" }}>
           {!scale ? (
             <div style={{ opacity: 0.8 }}>
               Enter valid positive width and height values to measure area.
             </div>
           ) : metrics.areaKm2 != null ? (
             <>
-              <h3>Area: {metrics.areaKm2.toFixed(2)} km²</h3>
-              <div>Perimeter: {metrics.perimeterKm.toFixed(2)} km</div>
+              <h3 style={{ margin: "0 0 10px 0" }}>
+                Area: {(metrics.areaKm2 * Math.pow(UNIT_CONVERSIONS[displayUnit].mult, 2)).toFixed(2)} {UNIT_CONVERSIONS[displayUnit].areaSuffix}
+              </h3>
+              <div style={{ fontSize: 15 }}>
+                Perimeter: {(metrics.perimeterKm * UNIT_CONVERSIONS[displayUnit].mult).toFixed(2)} {UNIT_CONVERSIONS[displayUnit].suffix}
+              </div>
             </>
           ) : (
             <div style={{ opacity: 0.8 }}>
@@ -469,7 +540,7 @@ function App() {
                 : "Close the polygon to measure area and perimeter."}
             </div>
           )}
-        </>
+        </div>
       )}
 
       <div
@@ -480,7 +551,7 @@ function App() {
         style={{
           width: WORKSPACE_WIDTH,
           height: WORKSPACE_HEIGHT,
-          margin: "20px auto 0",
+          margin: "0 auto",
           border: isDragOverWorkspace ? "2px solid #2563eb" : "2px dashed #94a3b8",
           borderRadius: 10,
           background: isDragOverWorkspace ? "#eff6ff" : "#f8fafc",
